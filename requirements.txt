@@ -1,2 +1,3 @@
 pymumble_py3
 click
+cryptography

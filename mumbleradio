@@ -10,23 +10,79 @@ This code is very stupid and basic, but it serves.
 #   - https://github.com/azlux/MumbleRadioPlayer/blob/py3/mumbleRadioPlayer.py -> and yes it uses ffmpeg
 #   - also https://github.com/azlux/botamusique -> but this adds a fancy web UI which is great and all
 # - accept play requests from the chat
+# - clean up tmp keys when done with them
+#   - if only openssl didn't need a *file*, but could take something in memory
 
 import pymumble_py3
 import wave
 
 import click
 
+import tempfile
+
+def selfsigned(name="mumbleradio"):
+    """
+    Generate a selfsigned keypair.
+
+    Returns: cert: Path, key: Path
+    """
+
+    # https://cryptography.io/en/latest/x509/tutorial/
+
+    # only import these if we're going to use them
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.backends import default_backend
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    import datetime
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
+
+    name = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, name)
+    ])
+
+    now = datetime.datetime.utcnow()
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now)
+        .not_valid_after(now + datetime.timedelta(days=10))
+        .sign(key, hashes.SHA256(), default_backend())
+    )
+    cert = cert.public_bytes(encoding=serialization.Encoding.PEM)
+    key = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+
+    # XXX TOCTOU
+    certfile = tempfile.mktemp(".pem", f"{name}-cert")
+    keyfile = tempfile.mktemp(".pem", f"{name}-key")
+    with open(certfile, "wb") as o: o.write(cert)
+    with open(keyfile, "wb") as o: o.write(key)
+
+    return certfile, keyfile
+
+
 @click.command()
 @click.option("--name", default="mumbleradio", help="Bot username")
-@click.option("--cert", type=click.Path(), default=None, help='TLS certificate')
-@click.option("--key", type=click.Path(), default=None, help='TLS key')
+@click.option("--cert", type=click.Path(), default=None, help='TLS certificate. If not given, an ephemeral one will be generated.')
+@click.option("--key", type=click.Path(), default=None, help='TLS key corresponding to the certificate.')
 @click.option("--channel", default=None, help="Channel to send to; nest subchannels with '/'. If not given, plays on the whole server")
 @click.argument('server')
 @click.argument('audiofile', type=click.Path())
 def main(name, cert, key, channel, server, audiofile):
     if cert is key is None:
-        # ... TODO: generate a cert if not given
-        pass
+        cert, key = selfsigned(name)
+    elif cert is None or key is None:
+        raise ValueError("cert and key must be given together or not at all.")
 
     client = pymumble_py3.Mumble(server, name, certfile=cert, keyfile=key)
     client.set_application_string("mumbleradio")
