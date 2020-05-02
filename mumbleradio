@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""
+Mumble music bot.
+
+This code is very stupid and basic, but it serves.
+"""
+
+# TODO:
+# - support arbitrary URLs and audio formats (ffmpeg? pyffmpeg?)
+#   - https://github.com/azlux/MumbleRadioPlayer/blob/py3/mumbleRadioPlayer.py -> and yes it uses ffmpeg
+#   - also https://github.com/azlux/botamusique -> but this adds a fancy web UI which is great and all
+# - accept play requests from the chat
+
+import pymumble_py3
+import wave
+
+import click
+
+@click.command()
+@click.option("--name", default="mumbleradio", help="Bot username")
+@click.option("--cert", type=click.Path(), default=None, help='TLS certificate')
+@click.option("--key", type=click.Path(), default=None, help='TLS key')
+@click.option("--channel", default=None, help="Channel to send to; nest subchannels with '/'. If not given, plays on the whole server")
+@click.argument('server')
+@click.argument('audiofile', type=click.Path())
+def main(name, cert, key, channel, server, audiofile):
+    if cert is key is None:
+        # ... TODO: generate a cert if not given
+        pass
+
+    client = pymumble_py3.Mumble(server, name, certfile=cert, keyfile=key)
+    client.set_application_string("mumbleradio")
+
+    # improve the audio quality
+    client.set_codec_profile("audio")
+
+    client.start()
+    client.is_ready()
+    client.set_bandwidth(200000)
+
+    if channel:
+        client.channels.find_by_tree(channel.split("/")).move_in()
+
+    with wave.open(audiofile) as w:
+        B = 256 # batch size; TODO: tune this
+        for i in range(w.getnframes()//B+1):
+            client.sound_output.add_sound(w.readframes(B))
+
+    # wait for the audio buffer to drain
+    # this is probably not threadsafe
+    # https://github.com/azlux/pymumble/issues/64
+    import time
+    while client.sound_output.pcm: time.sleep(1)
+
+    client.control_socket.close() # XXX todo: use https://github.com/azlux/pymumble/blame/575d77600ebd2595e80e33acea1a17380ec97906/pymumble_py3/mumble.py#L661
+    # XXX causes 'ValueError: file descriptor cannot be a negative integer (-1)' in the inner select()
+    #client.stop() # better. implemented but not pushed to pypi yet https://github.com/azlux/pymumble/issues/61
+    client.join()
+
+if __name__ == '__main__':
+    main()
+
