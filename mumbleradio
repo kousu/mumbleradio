@@ -97,8 +97,12 @@ def main(name, cert, key, channel, server, audiofile):
     if channel:
         client.channels.find_by_tree(channel.split("/")).move_in()
 
+    # add a small batch of silence to help clients stabilize the new sound before playing
+    for i in range(44100//2):
+        client.sound_output.add_sound(b"\x00"*4) # why 4? it's the size of a frame. I think.
+
     with wave.open(audiofile) as w:
-        B = 256 # batch size; TODO: tune this
+        B = 44100*30 # batch size; TODO: tune this
         for i in range(w.getnframes()//B+1):
             client.sound_output.add_sound(w.readframes(B))
 
